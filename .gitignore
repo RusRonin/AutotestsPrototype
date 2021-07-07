@@ -1,0 +1,7 @@
+Backend/bin/
+Backend/obj/
+Backend/Screenshots/
+Core/obj/
+Core/bin/
+.vs/
+Backend/PageSources/
