@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using BaristaLabs.ChromeDevTools.Runtime;
 
 namespace Core.Screenshot
@@ -25,7 +26,7 @@ namespace Core.Screenshot
             new Thread( delegate () { ProcessQueue(); } ).Start();
         }
 
-        private void TakeScreenshotsForRequester( EnqueuedScreenshotRequester requester )
+        private async Task TakeScreenshotsForRequester( EnqueuedScreenshotRequester requester )
         {
             foreach ( var screenSize in ScreenSizesStorage.ScreenSizes )
             {
@@ -63,8 +64,8 @@ namespace Core.Screenshot
                 {
                     try
                     {
-                        screenshot = requester.ChromeSession.Page.CaptureScreenshot( new BaristaLabs.ChromeDevTools.Runtime.Page.CaptureScreenshotCommand() )
-                            .Result.Data;
+                        screenshot = ( await requester.ChromeSession.Page.CaptureScreenshot( 
+                            new BaristaLabs.ChromeDevTools.Runtime.Page.CaptureScreenshotCommand() ) ).Data;
                     }
                     catch ( InvalidOperationException )
                     {
