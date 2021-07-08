@@ -1,6 +1,8 @@
 ﻿using Core.Chrome;
 using Core.HtmlStorage;
+using Core.RemoteDebuggerPortManager;
 using Core.Screenshot;
+using Core.Awaiters;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HttpsPolicy;
@@ -36,9 +38,15 @@ namespace Backend
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "Backend", Version = "v1" });
             });
 
+            services.AddSingleton<IRemoteDebuggerPortManager, RemoteDebuggerPortManager>();
+            services.AddSingleton<IScreenshotTaker, ChromeScreenshotTaker>();
+
             services.AddScoped<ChromeProcess>();
             services.AddScoped<IHtmlStorage, FileSystemHtmlStorage>();
-            services.AddScoped<IScreenshotTaker, ChromeScreenshotTaker>();
+
+            services.AddTransient<IDomLoadedAwaiter, DomLoadedAwaiter>();
+            services.AddTransient<IScriptExecutionCompletedAwaiter, ScriptExecutionCompletedAwaiter>();
+            services.AddTransient<IPageLoadedAwaiter, PageLoadedAwaiter>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.

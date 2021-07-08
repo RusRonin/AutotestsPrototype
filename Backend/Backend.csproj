@@ -7,6 +7,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="PageSources\**" />
+    <Compile Remove="Screenshots\**" />
+    <Content Remove="PageSources\**" />
+    <Content Remove="Screenshots\**" />
+    <EmbeddedResource Remove="PageSources\**" />
+    <EmbeddedResource Remove="Screenshots\**" />
+    <None Remove="PageSources\**" />
+    <None Remove="Screenshots\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="BaristaLabs.ChromeDevTools.Runtime" Version="91.0.4472.124" />
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.10.14" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="5.6.3" />

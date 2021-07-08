@@ -8,34 +8,51 @@ using BaristaLabs.ChromeDevTools.Runtime;
 using Newtonsoft.Json;
 using Core.Chrome;
 using Core.Screenshot;
+using Core.Awaiters;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.IO;
 using Core;
 using Core.HtmlStorage;
+using Core.RemoteDebuggerPortManager;
 
 namespace Backend.Controllers
 {
     [Route( "api/[controller]" )]
     [ApiController]
-    public class PageTestingController : ControllerBase
+    public class PageTestingController : ControllerBase, IScreenshotRequester, IDomAwaitingTester, IScriptAwaitingTester, IPageLoadedAwaitingTester
     {
         private readonly ChromeProcess _chromeProcess;
         private readonly IHtmlStorage _htmlStorage;
         private readonly IScreenshotTaker _screenshotTaker;
-        private readonly int _chromeRemoteDebuggerPort;
+        private readonly IRemoteDebuggerPortManager _remoteDebuggerPortManager;
+        private readonly IDomLoadedAwaiter _domAwaiter;
+        private readonly IScriptExecutionCompletedAwaiter _scriptAwaiter;
+        private readonly IPageLoadedAwaiter _pageAwaiter;
+        private int ChromeRemoteDebuggerPort { get; set; }
+        private bool ScreenshotsAreReady { get; set; }
+        private bool DomIsReady { get; set; }
+        private bool ScriptExecutionCompleted { get; set; }
+        private bool PageIsReady { get; set; }
 
-        public PageTestingController( ChromeProcess chromeProcess, IHtmlStorage htmlStorage, IScreenshotTaker screenshotTaker )
+        public PageTestingController( ChromeProcess chromeProcess, IHtmlStorage htmlStorage, IScreenshotTaker screenshotTaker,
+            IRemoteDebuggerPortManager remoteDebuggerPortManager, IDomLoadedAwaiter domAwaiter, 
+            IScriptExecutionCompletedAwaiter scriptAwaiter, IPageLoadedAwaiter pageAwaiter )
         {
             _chromeProcess = chromeProcess;
             _htmlStorage = htmlStorage;
             _screenshotTaker = screenshotTaker;
-            _chromeRemoteDebuggerPort = new Random().Next( 9222, 10000 );
+            _remoteDebuggerPortManager = remoteDebuggerPortManager;
+            _domAwaiter = domAwaiter;
+            _scriptAwaiter = scriptAwaiter;
+            _pageAwaiter = pageAwaiter;
         }
 
         [HttpGet( "{base64Url}" )]
         public async Task<IActionResult> Get( [FromRoute] string base64Url, [FromQuery] int launchId )
         {
+            ChromeRemoteDebuggerPort = _remoteDebuggerPortManager.AllocateRDPort();
+
             //as whole site crawling is not implemented, and we use only file system storage,
             //we have single resource with constant resourceId
             int resourceId = 1;
@@ -45,9 +62,9 @@ namespace Backend.Controllers
             byte[] base64EncodedBytes = System.Convert.FromBase64String( base64Url );
             string url = System.Text.Encoding.UTF8.GetString( base64EncodedBytes );
 
-            _chromeProcess.StartChrome( _chromeRemoteDebuggerPort );
+            _chromeProcess.StartChrome( ChromeRemoteDebuggerPort );
 
-            HttpWebRequest request = WebRequest.CreateHttp( $"http://localhost:{_chromeRemoteDebuggerPort}/json" );
+            HttpWebRequest request = WebRequest.CreateHttp( $"http://localhost:{ChromeRemoteDebuggerPort}/json" );
             request.Method = WebRequestMethods.Http.Get;
             HttpWebResponse response = ( HttpWebResponse )request.GetResponse();
             ChromeBrowserFrame[] frames;
@@ -80,8 +97,29 @@ namespace Backend.Controllers
                     Url = url
                 } );
 
+                PageIsReady = false;
+
+                new Thread( delegate () { _pageAwaiter.Await( this, session ); } ).Start();
+
+                while ( !PageIsReady )
+                {
+                    Thread.Sleep( 100 );
+                }
+
+                DomIsReady = false;
+                ScriptExecutionCompleted = false;
+
+                new Thread( delegate () { _domAwaiter.Await( this, session ); } ).Start();
+
+                while ( !DomIsReady )
+                {
+                    Thread.Sleep( 100 );
+                }
+
+                Thread.Sleep( 10000 );
+
                 //if page is formed by scripts, we have to wait to ensure its' html is fully created
-                Thread.Sleep( 2000 );
+                //Thread.Sleep( 30000 );
 
                 var document = await session.DOM.GetDocument( new BaristaLabs.ChromeDevTools.Runtime.DOM.GetDocumentCommand()
                 {
@@ -127,11 +165,89 @@ namespace Backend.Controllers
                 } );
                 await runtimeAdapter.Enable( new BaristaLabs.ChromeDevTools.Runtime.Runtime.EnableCommand() );
 
-                _screenshotTaker.TakeAllScreenshots( session, workingFrame.Id, launchId, resourceId );
+                testingResult.Logs.AddRange( await GetIframesLogs( ChromeRemoteDebuggerPort ) );
+
+                ScreenshotsAreReady = false;
+                _screenshotTaker.TakeAllScreenshots( this, session, workingFrame.Id, launchId, resourceId );
+                while ( !ScreenshotsAreReady )
+                {
+                    Thread.Sleep( 100 );
+                }
                 _chromeProcess.StopChrome();
             }
 
+            _remoteDebuggerPortManager.FreeRDPort( ChromeRemoteDebuggerPort );
+
             return Ok(testingResult);
+        }
+
+        [NonAction]
+        public async Task<List<string>> GetIframesLogs( int chromeRemoteDebuggingPort )
+        {
+            List<string> logs = new List<string>();
+
+            HttpWebRequest request = WebRequest.CreateHttp( $"http://localhost:{ChromeRemoteDebuggerPort}/json" );
+            request.Method = WebRequestMethods.Http.Get;
+            HttpWebResponse response = ( HttpWebResponse )request.GetResponse();
+            ChromeBrowserFrame[] frames;
+            using ( var reader = new StreamReader( response.GetResponseStream() ) )
+            {
+                frames = JsonConvert.DeserializeObject<ChromeBrowserFrame[]>( reader.ReadToEnd() );
+            }
+
+            foreach ( var frame in frames )
+            {
+                if ( frame.Type.Equals( "iframe" ) )
+                {
+                    using ( var session = new ChromeSession( frame.WebSocketDebuggerUrl ) )
+                    {
+
+                        BaristaLabs.ChromeDevTools.Runtime.Log.LogAdapter logAdapter = new BaristaLabs.ChromeDevTools.Runtime.Log.LogAdapter( session );
+                        logAdapter.SubscribeToEntryAddedEvent( log =>
+                        {
+                            logs.Add( log.Entry.Text );
+                        } );
+                        await logAdapter.Enable( new BaristaLabs.ChromeDevTools.Runtime.Log.EnableCommand() );
+
+                        BaristaLabs.ChromeDevTools.Runtime.Runtime.RuntimeAdapter runtimeAdapter = new BaristaLabs.ChromeDevTools.Runtime.Runtime.RuntimeAdapter( session );
+                        runtimeAdapter.SubscribeToExceptionThrownEvent( exception =>
+                        {
+                            logs.Add( $"{ exception.ExceptionDetails.Text ?? ""  } " +
+                                $"{ exception.ExceptionDetails.Exception.Value ?? "" } " +
+                                $"{ exception.ExceptionDetails.Exception.Description ?? "" }" );
+                        } );
+                        await runtimeAdapter.Enable( new BaristaLabs.ChromeDevTools.Runtime.Runtime.EnableCommand() );
+                        //Thread.Sleep( 1000 );
+                        //Thread.Sleep( 1 );
+                    }
+                }
+            }
+
+            return logs;
+        }
+
+        [NonAction]
+        public void NotifyScreenshotsAreReady()
+        {
+            ScreenshotsAreReady = true;
+        }
+
+        [NonAction]
+        void IDomAwaitingTester.NotifyReady()
+        {
+            DomIsReady = true;
+        }
+
+        [NonAction]
+        void IScriptAwaitingTester.NotifyReady()
+        {
+            ScriptExecutionCompleted = true;
+        }
+
+        [NonAction]
+        void IPageLoadedAwaitingTester.NotifyReady()
+        {
+            PageIsReady = true;
         }
     }
 }
