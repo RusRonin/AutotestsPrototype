@@ -1,24 +1,23 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using BaristaLabs.ChromeDevTools.Runtime;
-using Newtonsoft.Json;
 using Core.Chrome;
 using Core.Screenshot;
 using Core.Awaiters;
 using Microsoft.AspNetCore.Mvc;
-using System.IO;
 using Core;
 using Core.HtmlStorage;
 using Core.RemoteDebuggerPortManager;
+using Core.LogExtractor;
 
 namespace Backend.Controllers
 {
     [Route( "api/[controller]" )]
     [ApiController]
-    public class PageTestingController : ControllerBase, IScreenshotRequester, IDomAwaitingTester, IScriptAwaitingTester, IPageLoadedAwaitingTester
+    public class PageTestingController : ControllerBase, IScreenshotRequester, IDomAwaitingTester, 
+        IScriptAwaitingTester, IPageLoadedAwaitingTester
     {
         private readonly ChromeProcess _chromeProcess;
         private readonly IHtmlStorage _htmlStorage;
@@ -27,6 +26,8 @@ namespace Backend.Controllers
         private readonly IDomLoadedAwaiter _domAwaiter;
         private readonly IScriptExecutionCompletedAwaiter _scriptAwaiter;
         private readonly IPageLoadedAwaiter _pageAwaiter;
+        private readonly ILogExtractor _logExtractor;
+        private readonly IChromeFrameManager _frameManager;
         private int ChromeRemoteDebuggerPort { get; set; }
         private bool ScreenshotsAreReady { get; set; }
         private bool DomIsReady { get; set; }
@@ -35,7 +36,8 @@ namespace Backend.Controllers
 
         public PageTestingController( ChromeProcess chromeProcess, IHtmlStorage htmlStorage, IScreenshotTaker screenshotTaker,
             IRemoteDebuggerPortManager remoteDebuggerPortManager, IDomLoadedAwaiter domAwaiter, 
-            IScriptExecutionCompletedAwaiter scriptAwaiter, IPageLoadedAwaiter pageAwaiter )
+            IScriptExecutionCompletedAwaiter scriptAwaiter, IPageLoadedAwaiter pageAwaiter,
+            ILogExtractor logExtractor, IChromeFrameManager frameManager )
         {
             _chromeProcess = chromeProcess;
             _htmlStorage = htmlStorage;
@@ -44,6 +46,8 @@ namespace Backend.Controllers
             _domAwaiter = domAwaiter;
             _scriptAwaiter = scriptAwaiter;
             _pageAwaiter = pageAwaiter;
+            _logExtractor = logExtractor;
+            _frameManager = frameManager;
         }
 
         [HttpGet( "{base64Url}" )]
@@ -62,31 +66,15 @@ namespace Backend.Controllers
 
             _chromeProcess.StartChrome( ChromeRemoteDebuggerPort );
 
-            HttpWebRequest request = WebRequest.CreateHttp( $"http://localhost:{ChromeRemoteDebuggerPort}/json" );
-            request.Method = WebRequestMethods.Http.Get;
-            HttpWebResponse response = ( HttpWebResponse )request.GetResponse();
-            ChromeBrowserFrame[] frames;
-            using ( var reader = new StreamReader( response.GetResponseStream() ) )
-            {
-                frames = JsonConvert.DeserializeObject<ChromeBrowserFrame[]>( reader.ReadToEnd() );
-            }
-
-            ChromeBrowserFrame workingFrame = null;
-            foreach ( var frame in frames )
-            {
-                if ( frame.Type.Equals( "page" ) )
-                {
-                    workingFrame = frame;
-                    break;
-                }
-            }
-
-            if ( workingFrame == null )
+            List<ChromeBrowserFrame> pageFrames = _frameManager.GetFramesByType( ChromeRemoteDebuggerPort, "page" );
+            if ( pageFrames.Count == 0 )
             {
                 //what response code should we return if we can't launch chrome properly => can't test page?
                 //400 for now, should be changed
                 return BadRequest();
             }
+
+            ChromeBrowserFrame workingFrame = pageFrames[ 0 ];
 
             using ( var session = new ChromeSession( workingFrame.WebSocketDebuggerUrl ) )
             {
@@ -115,9 +103,6 @@ namespace Backend.Controllers
                 }
 
                 Thread.Sleep( 10000 );
-
-                //if page is formed by scripts, we have to wait to ensure its' html is fully created
-                //Thread.Sleep( 30000 );
 
                 var document = await session.DOM.GetDocument( new BaristaLabs.ChromeDevTools.Runtime.DOM.GetDocumentCommand()
                 {
@@ -149,21 +134,7 @@ namespace Backend.Controllers
                     }
                 }
 
-                BaristaLabs.ChromeDevTools.Runtime.Log.LogAdapter logAdapter = new BaristaLabs.ChromeDevTools.Runtime.Log.LogAdapter( session );
-                logAdapter.SubscribeToEntryAddedEvent( log =>
-                {
-                    testingResult.Logs.Add( log.Entry.Text );
-                } );
-                await logAdapter.Enable( new BaristaLabs.ChromeDevTools.Runtime.Log.EnableCommand() );
-
-                BaristaLabs.ChromeDevTools.Runtime.Runtime.RuntimeAdapter runtimeAdapter = new BaristaLabs.ChromeDevTools.Runtime.Runtime.RuntimeAdapter( session );
-                runtimeAdapter.SubscribeToExceptionThrownEvent( exception =>
-                {
-                    testingResult.Logs.Add( exception.ExceptionDetails.Exception.Description );
-                } );
-                await runtimeAdapter.Enable( new BaristaLabs.ChromeDevTools.Runtime.Runtime.EnableCommand() );
-
-                testingResult.Logs.AddRange( await GetIframesLogs( ChromeRemoteDebuggerPort ) );
+                testingResult.Logs = await _logExtractor.Extract( session, ChromeRemoteDebuggerPort );
 
                 ScreenshotsAreReady = false;
                 _screenshotTaker.TakeAllScreenshots( this, session, workingFrame.Id, launchId, resourceId );
@@ -177,51 +148,6 @@ namespace Backend.Controllers
             _remoteDebuggerPortManager.FreeRDPort( ChromeRemoteDebuggerPort );
 
             return Ok(testingResult);
-        }
-
-        [NonAction]
-        public async Task<List<string>> GetIframesLogs( int chromeRemoteDebuggingPort )
-        {
-            List<string> logs = new List<string>();
-
-            HttpWebRequest request = WebRequest.CreateHttp( $"http://localhost:{ChromeRemoteDebuggerPort}/json" );
-            request.Method = WebRequestMethods.Http.Get;
-            HttpWebResponse response = ( HttpWebResponse )request.GetResponse();
-            ChromeBrowserFrame[] frames;
-            using ( var reader = new StreamReader( response.GetResponseStream() ) )
-            {
-                frames = JsonConvert.DeserializeObject<ChromeBrowserFrame[]>( reader.ReadToEnd() );
-            }
-
-            foreach ( var frame in frames )
-            {
-                if ( frame.Type.Equals( "iframe" ) )
-                {
-                    using ( var session = new ChromeSession( frame.WebSocketDebuggerUrl ) )
-                    {
-
-                        BaristaLabs.ChromeDevTools.Runtime.Log.LogAdapter logAdapter = new BaristaLabs.ChromeDevTools.Runtime.Log.LogAdapter( session );
-                        logAdapter.SubscribeToEntryAddedEvent( log =>
-                        {
-                            logs.Add( log.Entry.Text );
-                        } );
-                        await logAdapter.Enable( new BaristaLabs.ChromeDevTools.Runtime.Log.EnableCommand() );
-
-                        BaristaLabs.ChromeDevTools.Runtime.Runtime.RuntimeAdapter runtimeAdapter = new BaristaLabs.ChromeDevTools.Runtime.Runtime.RuntimeAdapter( session );
-                        runtimeAdapter.SubscribeToExceptionThrownEvent( exception =>
-                        {
-                            logs.Add( $"{ exception.ExceptionDetails.Text ?? ""  } " +
-                                $"{ exception.ExceptionDetails.Exception.Value ?? "" } " +
-                                $"{ exception.ExceptionDetails.Exception.Description ?? "" }" );
-                        } );
-                        await runtimeAdapter.Enable( new BaristaLabs.ChromeDevTools.Runtime.Runtime.EnableCommand() );
-                        //Thread.Sleep( 1000 );
-                        //Thread.Sleep( 1 );
-                    }
-                }
-            }
-
-            return logs;
         }
 
         [NonAction]

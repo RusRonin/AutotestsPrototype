@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.OpenApi.Models;
+using Core.LogExtractor;
 
 namespace Backend
 {
@@ -36,10 +37,12 @@ namespace Backend
 
             services.AddScoped<ChromeProcess>();
             services.AddScoped<IHtmlStorage, FileSystemHtmlStorage>();
+            services.AddScoped<ILogExtractor, LogExtractor>();
 
             services.AddTransient<IDomLoadedAwaiter, DomLoadedAwaiter>();
             services.AddTransient<IScriptExecutionCompletedAwaiter, ScriptExecutionCompletedAwaiter>();
             services.AddTransient<IPageLoadedAwaiter, PageLoadedAwaiter>();
+            services.AddTransient<IChromeFrameManager, ChromeFrameManager>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
