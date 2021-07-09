@@ -71,12 +71,12 @@ namespace Core.Screenshot
                     try
                     {
                         _logger.LogInformation( $"Trying to get screenshot: attempt {attempts}" );
-                        screenshot = ( await requester.ChromeSession.Page.CaptureScreenshot( 
+                        screenshot = ( await requester.ChromeSession.Page.CaptureScreenshot(
                             new BaristaLabs.ChromeDevTools.Runtime.Page.CaptureScreenshotCommand() ) ).Data;
                     }
                     catch ( InvalidOperationException )
                     {
-                        if (attempts > 5)
+                        if ( attempts > 5 )
                         {
                             throw new Exception();
                         }
@@ -92,6 +92,8 @@ namespace Core.Screenshot
             }
 
             _logger.LogInformation( "Screenshots ready" );
+
+            _logger.LogInformation( $"Finished processing requester from launch {requester.LaunchId}" );
 
             requester.ScreenshotRequester.NotifyScreenshotsAreReady();
         }
@@ -116,8 +118,8 @@ namespace Core.Screenshot
                 if ( Requesters.Count > 0 )
                 {
                     EnqueuedScreenshotRequester requester = Requesters.Dequeue();
+                    _logger.LogInformation( $"Started processing requester from launch {requester.LaunchId}" );
                     await TakeScreenshotsForRequester( requester );
-                    requester.ScreenshotRequester.NotifyScreenshotsAreReady();
                 }
                 else
                 {

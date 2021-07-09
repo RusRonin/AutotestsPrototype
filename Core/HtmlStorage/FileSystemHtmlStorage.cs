@@ -8,11 +8,11 @@ namespace Core.HtmlStorage
 
         public string LoadHtml( int launchId, int resourceId )
         {
-            string path = $"{ Directory.GetCurrentDirectory() }//PageSources//{ launchId }";
+            string path = $"{ Directory.GetCurrentDirectory() }\\PageSources\\{ launchId }";
 
             try
             {
-                return File.ReadAllText( $"{ path }//{ resourceId }.html" );
+                return File.ReadAllText( $"{ path }\\{ resourceId }.html" );
             }
             catch
             {
@@ -22,11 +22,11 @@ namespace Core.HtmlStorage
 
         public void SaveHtml( int launchId, int resourceId, string html )
         {
-            string path = $"{ Directory.GetCurrentDirectory() }//PageSources//{ launchId }";
+            string path = $"{ Directory.GetCurrentDirectory() }\\PageSources\\{ launchId }";
             //ensure that directory for launch is created
             Directory.CreateDirectory( path );
 
-            File.WriteAllText( $"{ path }//{ resourceId }.html", html );
+            File.WriteAllText( $"{ path }\\{ resourceId }.html", html );
         }
     }
 }
