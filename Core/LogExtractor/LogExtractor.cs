@@ -2,12 +2,14 @@
 using System.Threading.Tasks;
 using BaristaLabs.ChromeDevTools.Runtime;
 using Core.Chrome;
+using Microsoft.Extensions.Logging;
 
 namespace Core.LogExtractor
 {
     public class LogExtractor : ILogExtractor
     {
         private readonly IChromeFrameManager _frameManager;
+        private readonly ILogger<LogExtractor> logger;
 
         public LogExtractor( IChromeFrameManager frameManager )
         {

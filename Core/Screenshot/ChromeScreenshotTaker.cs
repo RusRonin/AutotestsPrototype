@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using BaristaLabs.ChromeDevTools.Runtime;
+using Microsoft.Extensions.Logging;
 
 namespace Core.Screenshot
 {
@@ -20,29 +21,34 @@ namespace Core.Screenshot
         }
 
         private Queue<EnqueuedScreenshotRequester> Requesters { get; set; } = new Queue<EnqueuedScreenshotRequester>();
+        private readonly ILogger<ChromeScreenshotTaker> _logger;
 
-        public ChromeScreenshotTaker()
+        public ChromeScreenshotTaker( ILogger<ChromeScreenshotTaker> logger )
         {
-            new Thread( delegate () { ProcessQueue(); } ).Start();
+            _logger = logger;
+            _logger.LogInformation( "Starting screenshot queue..." );
+            new Thread( async delegate () { await ProcessQueue(); } ).Start();
         }
 
         private async Task TakeScreenshotsForRequester( EnqueuedScreenshotRequester requester )
         {
+            _logger.LogInformation( "Taking screenshots" );
             foreach ( var screenSize in ScreenSizesStorage.ScreenSizes )
             {
                 int width = screenSize.Key;
                 int height = screenSize.Value;
 
-                long windowID = requester.ChromeSession.Browser.GetWindowForTarget( new BaristaLabs.ChromeDevTools.Runtime.Browser.GetWindowForTargetCommand()
+                long windowID = ( await requester.ChromeSession.Browser.GetWindowForTarget( new BaristaLabs.ChromeDevTools.Runtime.Browser.GetWindowForTargetCommand()
                 {
                     TargetId = requester.TargetId
-                } ).Result.WindowId;
+                } ) ).WindowId;
 
-                requester.ChromeSession.Browser.SetWindowBounds( new BaristaLabs.ChromeDevTools.Runtime.Browser.SetWindowBoundsCommand()
+                await requester.ChromeSession.Browser.SetWindowBounds( new BaristaLabs.ChromeDevTools.Runtime.Browser.SetWindowBoundsCommand()
                 {
                     WindowId = windowID,
                     Bounds = new BaristaLabs.ChromeDevTools.Runtime.Browser.Bounds()
                     {
+                        WindowState = BaristaLabs.ChromeDevTools.Runtime.Browser.WindowState.Normal,
                         Height = height,
                         Width = width
                     }
@@ -58,18 +64,19 @@ namespace Core.Screenshot
 
                 //wait a second to ensure page is fully loaded
                 Thread.Sleep( 1000 );
-                int attempts = 0;
+                int attempts = 1;
                 byte[] screenshot;
                 while ( true )
                 {
                     try
                     {
+                        _logger.LogInformation( $"Trying to get screenshot: attempt {attempts}" );
                         screenshot = ( await requester.ChromeSession.Page.CaptureScreenshot( 
                             new BaristaLabs.ChromeDevTools.Runtime.Page.CaptureScreenshotCommand() ) ).Data;
                     }
                     catch ( InvalidOperationException )
                     {
-                        if (attempts >= 5)
+                        if (attempts > 5)
                         {
                             throw new Exception();
                         }
@@ -84,11 +91,14 @@ namespace Core.Screenshot
                 }
             }
 
+            _logger.LogInformation( "Screenshots ready" );
+
             requester.ScreenshotRequester.NotifyScreenshotsAreReady();
         }
 
         public void TakeAllScreenshots( IScreenshotRequester requester, ChromeSession session, string targetId, int launchId, int resourceId )
         {
+            _logger.LogInformation( $"Enqueuing requester from launch {launchId}" );
             Requesters.Enqueue( new EnqueuedScreenshotRequester()
             {
                 ScreenshotRequester = requester,
@@ -99,14 +109,14 @@ namespace Core.Screenshot
             } );
         }
 
-        private void ProcessQueue()
+        private async Task ProcessQueue()
         {
             while ( true )
             {
                 if ( Requesters.Count > 0 )
                 {
                     EnqueuedScreenshotRequester requester = Requesters.Dequeue();
-                    TakeScreenshotsForRequester( requester );
+                    await TakeScreenshotsForRequester( requester );
                     requester.ScreenshotRequester.NotifyScreenshotsAreReady();
                 }
                 else

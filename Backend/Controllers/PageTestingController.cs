@@ -78,6 +78,20 @@ namespace Backend.Controllers
 
             using ( var session = new ChromeSession( workingFrame.WebSocketDebuggerUrl ) )
             {
+                long windowID = ( await session.Browser.GetWindowForTarget( new BaristaLabs.ChromeDevTools.Runtime.Browser.GetWindowForTargetCommand()
+                {
+                    TargetId = workingFrame.Id
+                } ) ).WindowId;
+
+                await session.Browser.SetWindowBounds( new BaristaLabs.ChromeDevTools.Runtime.Browser.SetWindowBoundsCommand()
+                {
+                    WindowId = windowID,
+                    Bounds = new BaristaLabs.ChromeDevTools.Runtime.Browser.Bounds
+                    {
+                        WindowState = BaristaLabs.ChromeDevTools.Runtime.Browser.WindowState.Minimized
+                    }
+                } );
+
                 await session.Page.Navigate( new BaristaLabs.ChromeDevTools.Runtime.Page.NavigateCommand()
                 {
                     Url = url
@@ -147,7 +161,7 @@ namespace Backend.Controllers
 
             _remoteDebuggerPortManager.FreeRDPort( ChromeRemoteDebuggerPort );
 
-            return Ok(testingResult);
+            return Ok( testingResult );
         }
 
         [NonAction]
